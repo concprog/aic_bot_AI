@@ -1,0 +1,13 @@
+haystack-ai==2.3
+fastapi
+uvicorn[all]
+qdrant-haystack
+pydantic
+python-jose
+cryptography>=3.1
+unstructured
+python-multipart
+fastembed
+llmlingua
+python-dotenv
+passlib
