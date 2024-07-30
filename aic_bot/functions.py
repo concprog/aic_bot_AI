@@ -3,7 +3,8 @@ from time import strftime, time
 from glob import glob
 
 
-import .models
+from . import models
+from . import pipelines
 
 timestr = lambda: strftime("%Y%m%d-%H%M%S")
 DATA_PATH = "data/user_doc"
@@ -38,6 +39,7 @@ def get_content_from_messages(messages: list[models.Message]):
     messages: list[str]  = list(map(lambda x: x.author+ ':'+ x.content,messages))
     return messages
 
+# AI Functions
 
 def respond_to_query(message: models.Message, context: list[models.Message]):
     if context is not None:
@@ -57,4 +59,10 @@ def index_file(file_path: str):
     # use unstructured to load file
     # and then pass content to index pipline
     pass
+
+def summarize(messages: list[models.Message]):
+    data = get_content_from_messages(messages)
+    data = "\n".join(data)
+    # implement summarization pipeline
+    
 
