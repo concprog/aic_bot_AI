@@ -1,68 +1,32 @@
-import os
-from time import strftime, time
-from glob import glob
-
-
 from . import models
-from . import pipelines
-
-timestr = lambda: strftime("%Y%m%d-%H%M%S")
-DATA_PATH = "data/user_doc"
+from typing import Callable
 
 
-# utilities
-
-def get_file_path(file_name: str):
-    file_path: str = os.path.abspath(file_name)  # Join the directory and file name
-    return file_path
-
-
-def get_flie_path_from_name(file_name: str):
-    files = glob(os.path.join(DATA_PATH, "**", file_name), recursive=True)
-    return get_file_path(files[0])
-
-
-
-def parse_code_from_md(data: str):
-    ls1 = data.split("```")
-    code: list[str] = []
-    ct = 1
-    for i in ls1:
-        if ct % 2 != 1 and not (i.isspace()) and i != "":
-            code.append(i)
-
-        ct += 1
-
-    return code
-
-def get_content_from_messages(messages: list[models.Message]):
-    messages: list[str]  = list(map(lambda x: x.author+ ':'+ x.content,messages))
-    return messages
-
-# AI Functions
-
-def respond_to_query(message: models.Message, context: list[models.Message]):
-    if context is not None:
-        context = get_content_from_messages(context)
-    query = message.content
-    # implement rag response pipeline with context
-    # (query, context) -> (response, source)
-    # channel/role based data filtering?
-    response = query
-    return response
-
-def index_data(data: models.Conversation):
-    # calls index pipeline
-    pass
-
-def index_file(file_path: str):
-    # use unstructured to load file
-    # and then pass content to index pipline
-    pass
-
-def summarize(messages: list[models.Message]):
-    data = get_content_from_messages(messages)
-    data = "\n".join(data)
-    # implement summarization pipeline
+def role_to_pri(role: str, clearances: list[models.ClearanceMapping] = models.clearances):
+    clearance = list(filter(lambda c: c.discord_role == role, clearances))
+    clearance = min(clearance, key=lambda c: c.priority)
+    return clearance.priority
     
+def react_to_pri(reactions: set[str], clearances: list[models.ClearanceMapping] = models.clearances):
+    clearance = list(filter(lambda c: c.reaction in reactions, clearances))
+    clearance = min(clearance, key=lambda c: c.priority)
+    return clearance.priority
+
+def rqa_query(message: models.Message, context: list[models.Message]):
+    pipeline_inputs: dict[str, dict] | dict[str, str] = {}
+    pipeline_inputs["embedder"] = {"text": message.content}
+    pipeline_inputs["retriever"]["filters"] = {"field": "meta.clearance", "operator": "<=", "value": role_to_pri(message.discord_role)}
+    pipeline_inputs["prompt_builder"] = {"query": message.content, "messages": context}
+    return pipeline_inputs
+
+def ingest_query(data: models.DataMessage):
+    pipeline_inputs: dict[str, dict] | dict[str, str] = {}
+    pipeline_inputs["content"] = data.content
+    pipeline_inputs["meta"] = react_to_pri(data.reactions)
+    return pipeline_inputs
+
+def summ_query(messages: list[models.Message]):
+    pipeline_inputs: dict[str, list[models.Message]] = {}
+    pipeline_inputs["messages"] = messages
+    return pipeline_inputs
 
