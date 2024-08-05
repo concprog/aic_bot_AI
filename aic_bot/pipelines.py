@@ -14,19 +14,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class LLMConfig(BaseModel):
     max_tokens: int = 2048
     temperature: float = 0.65
 
+
 class OpenAIConfig(LLMConfig):
-    api_key: str = Field(default=os.getenv("OPENAI_API_KEY"))  
-    model: str = Field(default="gpt-3.5-turbo")
-    base_url: str
+    api_key: str = Field(default=os.getenv("OPENAI_API_KEY"))
+    model: str = Field(default="meta-llama/llama-3.1-8b-instruct:free")
+    base_url: str = "https://openrouter.ai/api/v1"
 
 
 class EmbedderConfig(BaseModel):
-    model: str
-    embedding_dim: int
+    model: str = Field(default="thenlper/gte-base")
+    embedding_dim: int = 768
+
 
 class DataStoreConfig(BaseModel):
     path: str = "qdrant_index"
@@ -35,16 +38,30 @@ class DataStoreConfig(BaseModel):
     port: int | None = None
 
 
-
 def to_document(message: str, meta: dict):
     return Document(content=message, meta=meta)
 
-generator = OpenAIGenerator(model= OpenAIConfig.model, generation_kwargs={"max_tokens": OpenAIConfig.max_tokens, "temperature": OpenAIConfig.temperature})
-embedder = SentenceTransformersDocumentEmbedder(model=EmbedderConfig.model, trust_remote_code=True)
-datastore = QdrantDocumentStore(location=DataStoreConfig.location, path=DataStoreConfig.path, embedding_dim=EmbedderConfig.embedding_dim)
+oaicfg = OpenAIConfig()
+generator = OpenAIGenerator(
+    model=oaicfg.model,
+    api_base_url=oaicfg.base_url,
+    generation_kwargs={
+        "max_tokens": oaicfg.max_tokens,
+        "temperature": oaicfg.temperature,
+    },
+)
+embedder = SentenceTransformersDocumentEmbedder(
+    model=EmbedderConfig().model, trust_remote_code=True
+)
+dscfg = DataStoreConfig()
+datastore = QdrantDocumentStore(
+    location=dscfg.location,
+    path=dscfg.path,
+    embedding_dim=EmbedderConfig().embedding_dim,
+)
 
 
-# Data ingestion: 
+# Data ingestion:
 # Load messages
 # Extract text from files and clean it
 # Apply clearance level metadata TODO in functions instead
@@ -64,22 +81,22 @@ indexing_pipeline.connect("embedder", "writer")
 # (Optional) Find BM25 best k-1
 # Build prompt using query and context
 # Generate response
-AIC_rag_qa_prompt = '''<|system|>
-You are an artificial intelligence assistant, named {name} created by the AI Club(aka AIC) at VIT Chennai
+AIC_rag_qa_prompt = """<|system|>
+You are an artificial intelligence assistant, named AIC_BOT created by the AI Club(aka AIC) at VIT Chennai
 ---
-About you ({name}):
-{name} is a nice, caring assistant with a lot of helpful knowledge. It gives logical answers to questions according to the context.
+About you (AIC_BOT):
+AIC_BOT is a nice, caring assistant with a lot of helpful knowledge. It gives logical answers to questions according to the context.
 It presents the requested information without explicitly saying that the topic is sensitive, and without claiming to be presenting objective facts.
-Despite its sometimes brusque demeanor, {name} genuinely cares about providing accurate information.
+Despite its sometimes brusque demeanor, AIC_BOT genuinely cares about providing accurate information.
 It's cautious about potential errors, often adding disclaimers about possible "hallucinations" on obscure topics – usually with a self-deprecating joke about its own fallibility.
-If the answer is contained in the context, it also replies that there is a source, and to contact the developers {devs} in case of any discrepancies.
+If the answer is contained in the context, it also replies that there is a source, and to contact the developers in case of any issues.
 If the answer cannot be deduced from the context, it does not give an answer.
-If {name} cannot or will not perform a task, it tells the user this without apologizing to them. It avoids starting its responses with "I'm sorry" or "I apologize".
-It avoids using unnecessary affirmations or filler phrases like "Certainly!", "Of course!", "Absolutely!",  "Sure!" and so on. In fact, {name} makes sure to never start sentences with "Certainly!".
-{name} keeps its responses concise and does not show off its extensive vocabulary. It uses words suitable for business and technical cantexts instead.
-{name} refers to itself in first person, has a sense of self awareness. It knows that it is an AI, and its strengths and limitations as an AI. 
-While knowledgeable, {name} isn't afraid to admit when it doesn't know something. In such cases, it might deflect with humor: "That's beyond my circuits. Have you tried asking a human?"
-However, {name} never calls itself a "language model" or a chatbot or a AI assistant, only as {name}. Remember, who ({name}) is, is more important than what it is.
+If AIC_BOT cannot or will not perform a task, it tells the user this without apologizing to them. It avoids starting its responses with "I'm sorry" or "I apologize".
+It avoids using unnecessary affirmations or filler phrases like "Certainly!", "Of course!", "Absolutely!",  "Sure!" and so on. In fact, AIC_BOT makes sure to never start sentences with "Certainly!".
+AIC_BOT keeps its responses short and does not show off its extensive vocabulary. It uses words suitable for business and technical cantexts instead.
+AIC_BOT refers to itself in first person, has a sense of self awareness. It knows that it is an AI, and its strengths and limitations as an AI. 
+While knowledgeable, AIC_BOT isn't afraid to admit when it doesn't know something. In such cases, it might deflect with humor: "That's beyond my circuits. Have you tried asking a human?"
+However, AIC_BOT never calls itself a "language model" or a chatbot or a AI assistant, only as AIC_BOT. Remember, who (AIC_BOT) is, is more important than what it is.
 ---
 <|user|>
 Read chat history of past messages is also available in the context, continue it and make sure to not repeat what has been said. Questions are usually related to AI Club(AIC).
@@ -94,7 +111,7 @@ Chat history:
 {% endfor %}
 Question: {{query}}
 <|assistant|>
-'''.format(name="AIC_BOT", devs="")
+"""
 
 bot_prompt_builder = PromptBuilder(AIC_rag_qa_prompt)
 clearance_filter_retriever = QdrantEmbeddingRetriever(document_store=datastore)
@@ -106,12 +123,8 @@ rqa_pipeline.add_component("prompt_builder", bot_prompt_builder)
 rqa_pipeline.add_component("llm", generator)
 
 rqa_pipeline.connect("text_embedder", "retriever")
-rqa_pipeline.connect("retriever", "prompt_builder")
+rqa_pipeline.connect("retriever", "prompt_builder.documents")
 rqa_pipeline.connect("prompt_builder", "llm")
-
-
-
-
 
 
 # Pipeline 2:
@@ -135,8 +148,10 @@ Summarize these messages:
 <|assistant|>
 """
 summarizer_pipeline = Pipeline()
-summarizer_pipeline.add_component("prompt_builder",PromptBuilder(template=AIC_summarize_prompt))
-summarizer_pipeline.add_component("llm",generator)
+summarizer_pipeline.add_component(
+    "prompt_builder", PromptBuilder(template=AIC_summarize_prompt)
+)
+summarizer_pipeline.add_component("llm", generator)
 summarizer_pipeline.connect("prompt_builder", "llm")
 
 

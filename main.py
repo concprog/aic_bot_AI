@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Response
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from app.routes import router
+from aic_bot.routes import router
 
 
 app = FastAPI()

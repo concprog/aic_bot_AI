@@ -1,5 +1,4 @@
 from . import models
-from typing import Callable
 
 
 def role_to_pri(role: str, clearances: list[models.ClearanceMapping] = models.clearances):
