@@ -3,6 +3,7 @@ from fastapi import APIRouter
 
 from fastapi import UploadFile, File
 from fastapi.responses import FileResponse
+from haystack.core import pipeline
 from haystack_integrations.components.retrievers.qdrant import retriever
 
 from . import models, functions
@@ -20,16 +21,18 @@ def status():
 @router.post("/converse")
 def converse(conversation: models.Conversation):
     try:
-        response = pipelines.rqa_pipeline.run(conversation)
+        response = pipelines.rqa_pipeline.run(functions.rqa_query(conversation.messages[0], conversation.messages[1:]))
     except Exception as e:
         response = str(e)
     return models.BotMessage(content="")
 
 
-@router.post("/send_data")
-def send_data(data: list[models.DataMessage]):
+@router.post("/ingest_data")
+def ingest_data(data: list[models.DataMessage]):
     try:
-        
+        docs = list(map(functions.ingest_query, data))
+        docs = list(map(pipelines.to_document, docs))
+        _ = pipelines.indexing_pipeline.run(docs)
         response = "Data loaded!"
     except Exception as e:
         response = str(e) 
@@ -38,7 +41,7 @@ def send_data(data: list[models.DataMessage]):
 @router.post("/summarize")
 def summarize(messages: list[models.Message]):
     try:
-        response = "Data loaded!"
+        response = pipelines.summarizer_pipeline.run(functions.summ_query(messages))
     except Exception as e:
         response = str(e) 
     return models.BotMessage(content=response)

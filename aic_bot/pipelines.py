@@ -9,8 +9,10 @@ from haystack_integrations.components.retrievers.qdrant import QdrantEmbeddingRe
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 
 from pydantic import BaseModel, Field
-from .models import Conversation, Message
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class LLMConfig(BaseModel):
     max_tokens: int = 2048
