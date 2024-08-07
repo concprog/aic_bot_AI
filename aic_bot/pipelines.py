@@ -8,7 +8,8 @@ from haystack import Pipeline, Document
 from haystack_integrations.components.retrievers.qdrant import QdrantEmbeddingRetriever
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
+from abc import ABC, abstractmethod
 import os
 from dotenv import load_dotenv
 
@@ -16,8 +17,14 @@ load_dotenv()
 
 
 class LLMConfig(BaseModel):
-    max_tokens: int = 2048
-    temperature: float = 0.65
+    max_tokens: int = Field(default=2048)
+    temperature: float = Field(default=0.65)
+    model: str = Field(default="")
+
+    @computed_field
+    def generator(self):
+        pass
+
 
 
 class OpenAIConfig(LLMConfig):
@@ -25,11 +32,26 @@ class OpenAIConfig(LLMConfig):
     model: str = Field(default="meta-llama/llama-3.1-8b-instruct:free")
     base_url: str = "https://openrouter.ai/api/v1"
 
+    @computed_field
+    def generator(self):
+        return OpenAIGenerator(
+            model=self.model,
+            api_base_url=self.base_url,
+            generation_kwargs={
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+            },
+        )
+        
+
 
 class EmbedderConfig(BaseModel):
     model: str = Field(default="thenlper/gte-base")
     embedding_dim: int = 768
 
+    @computed_field
+    def embedder(self):
+        return SentenceTransformersDocumentEmbedder(model=self.model, trust_remote_code=True)
 
 class DataStoreConfig(BaseModel):
     path: str = "qdrant_index"
@@ -38,37 +60,29 @@ class DataStoreConfig(BaseModel):
     port: int | None = None
 
 
-def to_document(message: str, meta: dict):
+def to_document(message: str, meta: dict[str, str | int]):
     return Document(content=message, meta=meta)
 
-oaicfg = OpenAIConfig()
-generator = OpenAIGenerator(
-    model=oaicfg.model,
-    api_base_url=oaicfg.base_url,
-    generation_kwargs={
-        "max_tokens": oaicfg.max_tokens,
-        "temperature": oaicfg.temperature,
-    },
-)
-embedder = SentenceTransformersDocumentEmbedder(
-    model=EmbedderConfig().model, trust_remote_code=True
-)
+
+llmcfg = OpenAIConfig()
+embedcfg = EmbedderConfig()
 dscfg = DataStoreConfig()
+
 datastore = QdrantDocumentStore(
     location=dscfg.location,
     path=dscfg.path,
     embedding_dim=EmbedderConfig().embedding_dim,
 )
-
-
 # Data ingestion:
 # Load messages
 # Extract text from files and clean it
-# Apply clearance level metadata TODO in functions instead
+# Apply clearance level metadata TODO in functions instead.
 # Index data and store in qdrant
 indexing_pipeline = Pipeline()
 indexing_pipeline.add_component("cleaner", instance=DocumentCleaner())
-indexing_pipeline.add_component("embedder", embedder)
+indexing_pipeline.add_component(
+    "embedder",embedcfg.embedder()
+)
 indexing_pipeline.add_component("writer", DocumentWriter(document_store=datastore))
 indexing_pipeline.connect("cleaner", "embedder")
 indexing_pipeline.connect("embedder", "writer")
@@ -87,7 +101,7 @@ You are an artificial intelligence assistant, named AIC_BOT created by the AI Cl
 About you (AIC_BOT):
 AIC_BOT is a nice, caring assistant with a lot of helpful knowledge. It gives logical answers to questions according to the context.
 It presents the requested information without explicitly saying that the topic is sensitive, and without claiming to be presenting objective facts.
-Despite its sometimes brusque demeanor, AIC_BOT genuinely cares about providing accurate information.
+Despite its sometimes brusque demeanor, AIC_BOT genuinely cares about providing accurate information. However, it will never repeat itself.
 It's cautious about potential errors, often adding disclaimers about possible "hallucinations" on obscure topics – usually with a self-deprecating joke about its own fallibility.
 If the answer is contained in the context, it also replies that there is a source, and to contact the developers in case of any issues.
 If the answer cannot be deduced from the context, it does not give an answer.
@@ -99,7 +113,7 @@ While knowledgeable, AIC_BOT isn't afraid to admit when it doesn't know somethin
 However, AIC_BOT never calls itself a "language model" or a chatbot or a AI assistant, only as AIC_BOT. Remember, who (AIC_BOT) is, is more important than what it is.
 ---
 <|user|>
-Read chat history of past messages is also available in the context, continue it and make sure to not repeat what has been said. Questions are usually related to AI Club(AIC).
+Read chat history of past messages in the context, continue it and do not repeat what has been said already. Questions are usually related to AI Club(aka AIC).
 Using the information contained in the context, answer the question. 
 Context:
 {% for doc in documents %}
@@ -110,18 +124,20 @@ Chat history:
 @{{ msg.author }}: {{ msg.content }} 
 {% endfor %}
 Question: {{query}}
+
 <|assistant|>
 """
 
-bot_prompt_builder = PromptBuilder(AIC_rag_qa_prompt)
 clearance_filter_retriever = QdrantEmbeddingRetriever(document_store=datastore)
 
 rqa_pipeline = Pipeline()
-rqa_pipeline.add_component("text_embedder", embedder)
+rqa_pipeline.add_component(
+    "text_embedder",
+    SentenceTransformersDocumentEmbedder(model=embedcfg.model, trust_remote_code=True),
+)
 rqa_pipeline.add_component("retriever", clearance_filter_retriever)
-rqa_pipeline.add_component("prompt_builder", bot_prompt_builder)
-rqa_pipeline.add_component("llm", generator)
-
+rqa_pipeline.add_component("prompt_builder", PromptBuilder(AIC_rag_qa_prompt))
+rqa_pipeline.add_component("llm", llmcfg.generator())
 rqa_pipeline.connect("text_embedder", "retriever")
 rqa_pipeline.connect("retriever", "prompt_builder.documents")
 rqa_pipeline.connect("prompt_builder", "llm")
@@ -134,10 +150,10 @@ rqa_pipeline.connect("prompt_builder", "llm")
 # Generate response (no RAG)
 
 AIC_summarize_prompt = """<|user|>
-Summarize the following discussion ongoing in the AI Club, VIT Chennai
+Summarize the following discussion going on at the AI Club(aka AIC), VIT Chennai
 * Make sure to preserve all details and dates mentioned in the conversation. 
 * Pay special attention to events, dates and locations mentioned in the conversation
-* Use clear and concise language, and get rid of unnecessary fluff(such as greetings, "thank you"s and "so on"), but keep ideas talked about in the messages.
+* Use clear language, and get rid of unnecessary fluff(such as greetings, "thank you"s and "so on"), but keep ideas talked about in the messages.
 * Avoid using general filler phrases like "Certainly!", "Of course!", "Absolutely!",  "Sure!" and so on
 
 Summarize these messages:
@@ -151,7 +167,7 @@ summarizer_pipeline = Pipeline()
 summarizer_pipeline.add_component(
     "prompt_builder", PromptBuilder(template=AIC_summarize_prompt)
 )
-summarizer_pipeline.add_component("llm", generator)
+summarizer_pipeline.add_component("llm", llmcfg.generator())
 summarizer_pipeline.connect("prompt_builder", "llm")
 
 
