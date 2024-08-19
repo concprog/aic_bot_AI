@@ -1,21 +1,26 @@
 from pydantic import BaseModel
 
+
 class User(BaseModel):
     name: str
     password: str
+
 
 class Message(BaseModel):
     author: str
     discord_role: str
     content: str
 
+
 class Conversation(BaseModel):
     messages: list[Message]
     channel: str
 
+
 class DataMessage(Message):
     reactions: set[str] = set()
-    discord_role: str = "" 
+    discord_role: str = ""
+
 
 class BotMessage(Message):
     author: str = "AIC_BOT"
@@ -27,6 +32,7 @@ class ClearanceMapping(BaseModel):
     priority: int
     discord_role: str
     reaction: str
+
 
 clearances = [
     ClearanceMapping(name="sensitive", discord_role="Core", reaction="A", priority=0),

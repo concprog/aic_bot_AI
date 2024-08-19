@@ -1,89 +1,47 @@
 from haystack.components.generators import OpenAIGenerator
-from haystack.components.embedders import SentenceTransformersDocumentEmbedder
-from haystack.components.preprocessors import DocumentCleaner
+from haystack_integrations.components.embedders.jina import (
+    JinaTextEmbedder,
+    JinaDocumentEmbedder,
+)
+from haystack_integrations.components.retrievers.qdrant import QdrantEmbeddingRetriever
+from haystack.components.preprocessors import DocumentCleaner, DocumentSplitter
 from haystack.components.writers import DocumentWriter
 from haystack.components.builders import PromptBuilder
-from haystack import Pipeline, Document
 
-from haystack_integrations.components.retrievers.qdrant import QdrantEmbeddingRetriever
+
+from haystack import Pipeline, Document
+from haystack.document_stores.types import DuplicatePolicy
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 
-from pydantic import BaseModel, Field, computed_field
-from abc import ABC, abstractmethod
-import os
+from .component_configs import *
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-
-class LLMConfig(BaseModel):
-    max_tokens: int = Field(default=2048)
-    temperature: float = Field(default=0.65)
-    model: str = Field(default="")
-
-    @computed_field
-    def generator(self):
-        pass
-
-
-
-class OpenAIConfig(LLMConfig):
-    api_key: str = Field(default=os.getenv("OPENAI_API_KEY"))
-    model: str = Field(default="meta-llama/llama-3.1-8b-instruct:free")
-    base_url: str = "https://openrouter.ai/api/v1"
-
-    @computed_field
-    def generator(self):
-        return OpenAIGenerator(
-            model=self.model,
-            api_base_url=self.base_url,
-            generation_kwargs={
-                "max_tokens": self.max_tokens,
-                "temperature": self.temperature,
-            },
-        )
-        
-
-
-class EmbedderConfig(BaseModel):
-    model: str = Field(default="thenlper/gte-base")
-    embedding_dim: int = 768
-
-    @computed_field
-    def embedder(self):
-        return SentenceTransformersDocumentEmbedder(model=self.model, trust_remote_code=True)
-
-class DataStoreConfig(BaseModel):
-    path: str = "qdrant_index"
-    location: str = "memory"
-    url: str | None = None
-    port: int | None = None
-
-
-def to_document(message: str, meta: dict[str, str | int]):
-    return Document(content=message, meta=meta)
-
-
-llmcfg = OpenAIConfig()
-embedcfg = EmbedderConfig()
-dscfg = DataStoreConfig()
+llmconfig = OpenAIConfig()
+embedconfig = EmbedderConfig()
+documentstoreconfig = QdrantDataStoreConfig()
 
 datastore = QdrantDocumentStore(
-    location=dscfg.location,
-    path=dscfg.path,
-    embedding_dim=EmbedderConfig().embedding_dim,
+    embedding_dim=embedconfig.embedding_dim, **documentstoreconfig.component_kwargs
 )
+
 # Data ingestion:
 # Load messages
 # Extract text from files and clean it
-# Apply clearance level metadata TODO in functions instead.
+# Apply clearance level metadata DONE in functions instead.
 # Index data and store in qdrant
+
 indexing_pipeline = Pipeline()
-indexing_pipeline.add_component("cleaner", instance=DocumentCleaner())
+indexing_pipeline.add_component("cleaner", DocumentCleaner())
 indexing_pipeline.add_component(
-    "embedder",embedcfg.embedder()
+    "splitter", DocumentSplitter(split_by="passage", split_length=1)
 )
-indexing_pipeline.add_component("writer", DocumentWriter(document_store=datastore))
+indexing_pipeline.add_component("embedder", JinaDocumentEmbedder())
+indexing_pipeline.add_component(
+    "writer", DocumentWriter(document_store=datastore, policy=DuplicatePolicy.OVERWRITE)
+)
 indexing_pipeline.connect("cleaner", "embedder")
 indexing_pipeline.connect("embedder", "writer")
 
@@ -95,6 +53,7 @@ indexing_pipeline.connect("embedder", "writer")
 # (Optional) Find BM25 best k-1
 # Build prompt using query and context
 # Generate response
+
 AIC_rag_qa_prompt = """<|system|>
 You are an artificial intelligence assistant, named AIC_BOT created by the AI Club(aka AIC) at VIT Chennai
 ---
@@ -113,7 +72,7 @@ While knowledgeable, AIC_BOT isn't afraid to admit when it doesn't know somethin
 However, AIC_BOT never calls itself a "language model" or a chatbot or a AI assistant, only as AIC_BOT. Remember, who (AIC_BOT) is, is more important than what it is.
 ---
 <|user|>
-Read chat history of past messages in the context, continue it and do not repeat what has been said already. Questions are usually related to AI Club(aka AIC).
+Read through the chat history of past messages in the context, talk and do not repeat what has been said already. Questions are usually related to AI Club(aka AIC).
 Using the information contained in the context, answer the question. 
 Context:
 {% for doc in documents %}
@@ -123,22 +82,17 @@ Chat history:
 {% for msg in messages %} 
 @{{ msg.author }}: {{ msg.content }} 
 {% endfor %}
-Question: {{query}}
-
+Now, tell me: {{query}}
 <|assistant|>
 """
-
-clearance_filter_retriever = QdrantEmbeddingRetriever(document_store=datastore)
-
 rqa_pipeline = Pipeline()
+rqa_pipeline.add_component("embedder", JinaTextEmbedder())
 rqa_pipeline.add_component(
-    "text_embedder",
-    SentenceTransformersDocumentEmbedder(model=embedcfg.model, trust_remote_code=True),
+    "retriever", QdrantEmbeddingRetriever(document_store=datastore)
 )
-rqa_pipeline.add_component("retriever", clearance_filter_retriever)
 rqa_pipeline.add_component("prompt_builder", PromptBuilder(AIC_rag_qa_prompt))
-rqa_pipeline.add_component("llm", llmcfg.generator())
-rqa_pipeline.connect("text_embedder", "retriever")
+rqa_pipeline.add_component("llm", OpenAIGenerator(**llmconfig.component_kwargs))
+rqa_pipeline.connect("embedder.embedding", "retriever.query_embedding")
 rqa_pipeline.connect("retriever", "prompt_builder.documents")
 rqa_pipeline.connect("prompt_builder", "llm")
 
@@ -167,9 +121,5 @@ summarizer_pipeline = Pipeline()
 summarizer_pipeline.add_component(
     "prompt_builder", PromptBuilder(template=AIC_summarize_prompt)
 )
-summarizer_pipeline.add_component("llm", llmcfg.generator())
+summarizer_pipeline.add_component("llm", OpenAIGenerator(**llmconfig.component_kwargs))
 summarizer_pipeline.connect("prompt_builder", "llm")
-
-
-if __name__ == "__main__":
-    cfg = OpenAIConfig(base_url="")

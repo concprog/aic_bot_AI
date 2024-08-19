@@ -4,23 +4,26 @@ from fastapi import APIRouter
 from fastapi import UploadFile, File
 from fastapi.responses import FileResponse
 
-from . import models, functions, pipelines
+from . import functions, pipelines
 
 
 router = APIRouter()
+models = functions.get_models()
 
 
 @router.get("/")
 def status():
 
-    return {"message": "Status OK"}
+    return models.BotMessage(content="Status OK")
 
 
 @router.post("/converse")
 def converse(conversation: models.Conversation):
     try:
         response = pipelines.rqa_pipeline.run(
-            functions.rqa_query(conversation.messages[0], conversation.messages[1:])
+            functions.rqa_query(
+                message=conversation.messages[0], context=conversation.messages[1:]
+            )
         )
     except Exception as e:
         response = str(e)
